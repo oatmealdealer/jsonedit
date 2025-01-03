@@ -6,8 +6,8 @@ use std::{fs::File, path::PathBuf};
 
 #[derive(Debug, Parser)]
 struct Args {
-    /// Path to JSON file.
-    file: PathBuf,
+    /// Paths to one or more JSON files.
+    files: Vec<PathBuf>,
     /// A valid JSONPath query according to RFC 9535.
     query: JsonPath,
     #[command(subcommand)]
@@ -27,35 +27,37 @@ enum Command {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let mut json_value: serde_json::Value = serde_json::from_reader(&File::open(&args.file)?)?;
-    let pointers: Vec<String> = args
-        .query
-        .query_located(&json_value)
-        .dedup()
-        .into_iter()
-        .map(|node| node.location().to_json_pointer())
-        .collect();
-    match args.command {
-        Command::Set { key, value } => {
-            let parsed_value: Value = serde_json::from_str(value.as_str())?;
-            // https://github.com/hiltontj/serde_json_path/issues/66
-            pointers.iter().for_each(|pointer| {
-                if let Some(val) = json_value.pointer_mut(&pointer) {
-                    val.as_object_mut()
-                        .map(|obj| obj.insert(key.clone(), parsed_value.clone()));
-                }
-            });
-        }
-    }
+    for file in args.files.iter() {
+        let mut json_value: serde_json::Value = serde_json::from_reader(&File::open(file)?)?;
+        let pointers: Vec<String> = args
+            .query
+            .query_located(&json_value)
+            .dedup()
+            .into_iter()
+            .map(|node| node.location().to_json_pointer())
+            .collect();
 
-    let mut tmpfile = tempfile::NamedTempFile::new_in(
-        args.file
-            .canonicalize()?
-            .parent()
-            .context("file must have parent dir")?,
-    )?;
-    serde_json::to_writer_pretty(&mut tmpfile, &json_value)?;
-    tmpfile.persist(&args.file)?;
+        match &args.command {
+            Command::Set { key, value } => {
+                let parsed_value: Value = serde_json::from_str(value.as_str())?;
+                // https://github.com/hiltontj/serde_json_path/issues/66
+                pointers.iter().for_each(|pointer| {
+                    if let Some(val) = json_value.pointer_mut(pointer) {
+                        val.as_object_mut()
+                            .map(|obj| obj.insert(key.clone(), parsed_value.clone()));
+                    }
+                });
+            }
+        }
+
+        let mut tmpfile = tempfile::NamedTempFile::new_in(
+            file.canonicalize()?
+                .parent()
+                .context("file must have parent dir")?,
+        )?;
+        serde_json::to_writer_pretty(&mut tmpfile, &json_value)?;
+        tmpfile.persist(file)?;
+    }
 
     Ok(())
 }
