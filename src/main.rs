@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde_json::Value;
 use serde_json_path::JsonPath;
-use std::io::Seek;
 use std::{fs::File, path::PathBuf};
 
 #[derive(Debug, Parser)]
@@ -28,8 +27,7 @@ enum Command {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let mut file = File::options().read(true).write(true).open(&args.file)?;
-    let mut json_value: serde_json::Value = serde_json::from_reader(&file)?;
+    let mut json_value: serde_json::Value = serde_json::from_reader(&File::open(&args.file)?)?;
     let result = args.query.query_located(&json_value);
     match args.command {
         Command::Set { key, value } => {
@@ -47,11 +45,14 @@ fn main() -> Result<()> {
         }
     }
 
-    // TODO: Use a tempfile to avoid corrupting data
-    file.rewind()?;
-    serde_json::to_writer_pretty(&mut file, &json_value)?;
-    let pos = file.stream_position()?;
-    file.set_len(pos)?;
+    let mut tmpfile = tempfile::NamedTempFile::new_in(
+        args.file
+            .canonicalize()?
+            .parent()
+            .context("file must have parent dir")?,
+    )?;
+    serde_json::to_writer_pretty(&mut tmpfile, &json_value)?;
+    tmpfile.persist(&args.file)?;
 
     Ok(())
 }
