@@ -16,9 +16,9 @@ struct Args {
 
 #[derive(Debug, Clone, Parser)]
 enum Command {
-    /// Set a property on exactly one object returned by the query.
+    /// Set a property on any objects returned by the query.
     Set {
-        /// The property to set on the object.
+        /// The property to set.
         key: String,
         /// A valid JSON string.
         value: String,
@@ -28,20 +28,23 @@ enum Command {
 fn main() -> Result<()> {
     let args = Args::parse();
     let mut json_value: serde_json::Value = serde_json::from_reader(&File::open(&args.file)?)?;
-    let result = args.query.query_located(&json_value);
+    let pointers: Vec<String> = args
+        .query
+        .query_located(&json_value)
+        .dedup()
+        .into_iter()
+        .map(|node| node.location().to_json_pointer())
+        .collect();
     match args.command {
         Command::Set { key, value } => {
             let parsed_value: Value = serde_json::from_str(value.as_str())?;
             // https://github.com/hiltontj/serde_json_path/issues/66
-            let pointer = result.exactly_one()?.location().to_json_pointer();
-            if let Some(val) = json_value.pointer_mut(&pointer) {
-                val.as_object_mut()
-                    .context(format!(
-                        "{} returned something other than Object",
-                        &args.query
-                    ))?
-                    .insert(key, parsed_value);
-            }
+            pointers.iter().for_each(|pointer| {
+                if let Some(val) = json_value.pointer_mut(&pointer) {
+                    val.as_object_mut()
+                        .map(|obj| obj.insert(key.clone(), parsed_value.clone()));
+                }
+            });
         }
     }
 
